@@ -20,27 +20,44 @@ add_action('after_setup_theme', 'aros_index_setup');
 // 스타일 및 스크립트 등록
 function aros_index_scripts() {
     wp_enqueue_style('noto-sans-kr', 'https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap');
-    wp_enqueue_style('aros-index-style', get_stylesheet_uri());
-    wp_enqueue_script('aros-index-script', get_template_directory_uri() . '/js/main.js', array(), '1.0', true);
+    wp_enqueue_style('aros-index-style', get_stylesheet_uri(), array(), '1.0.0');
+    wp_enqueue_script('aros-index-script', get_template_directory_uri() . '/js/main.js', array('jquery'), '1.0.0', true);
 }
 add_action('wp_enqueue_scripts', 'aros_index_scripts');
 
 // 커스텀 포스트 타입: 버튼
 function aros_register_button_post_type() {
-    register_post_type('aros_button', array(
-        'labels' => array(
-            'name' => '버튼',
-            'singular_name' => '버튼',
-            'add_new' => '버튼 추가',
-            'add_new_item' => '새 버튼 추가',
-            'edit_item' => '버튼 수정',
-        ),
+    $labels = array(
+        'name' => '버튼',
+        'singular_name' => '버튼',
+        'add_new' => '버튼 추가',
+        'add_new_item' => '새 버튼 추가',
+        'edit_item' => '버튼 수정',
+        'new_item' => '새 버튼',
+        'view_item' => '버튼 보기',
+        'search_items' => '버튼 검색',
+        'not_found' => '버튼이 없습니다',
+        'not_found_in_trash' => '휴지통에 버튼이 없습니다'
+    );
+
+    $args = array(
+        'labels' => $labels,
         'public' => true,
+        'publicly_queryable' => true,
+        'show_ui' => true,
+        'show_in_menu' => true,
+        'query_var' => true,
+        'rewrite' => array('slug' => 'aros-button'),
+        'capability_type' => 'post',
         'has_archive' => false,
+        'hierarchical' => false,
+        'menu_position' => 5,
         'menu_icon' => 'dashicons-admin-links',
         'supports' => array('title'),
         'show_in_rest' => true,
-    ));
+    );
+
+    register_post_type('aros_button', $args);
 }
 add_action('init', 'aros_register_button_post_type');
 
@@ -59,7 +76,7 @@ add_action('add_meta_boxes', 'aros_button_meta_boxes');
 
 // 버튼 메타박스 콜백
 function aros_button_meta_callback($post) {
-    wp_nonce_field('aros_button_nonce', 'aros_button_nonce_field');
+    wp_nonce_field('aros_button_save_meta', 'aros_button_meta_nonce');
     
     $subtitle = get_post_meta($post->ID, '_button_subtitle', true);
     $url = get_post_meta($post->ID, '_button_url', true);
@@ -67,15 +84,28 @@ function aros_button_meta_callback($post) {
     $color = get_post_meta($post->ID, '_button_color', true);
     $section = get_post_meta($post->ID, '_button_section', true);
     $order = get_post_meta($post->ID, '_button_order', true);
+    
+    if (empty($color)) $color = 'card-blue';
+    if (empty($section)) $section = 'section1';
+    if (empty($order)) $order = 0;
     ?>
-    <table class="form-table">
+    <style>
+        .aros-meta-table { width: 100%; border-collapse: collapse; }
+        .aros-meta-table th { width: 150px; padding: 15px 10px; text-align: left; vertical-align: top; }
+        .aros-meta-table td { padding: 15px 10px; }
+        .aros-meta-table input[type="text"],
+        .aros-meta-table input[type="url"],
+        .aros-meta-table input[type="number"],
+        .aros-meta-table select { width: 100%; max-width: 500px; }
+    </style>
+    <table class="aros-meta-table">
         <tr>
             <th><label for="button_subtitle">부제목</label></th>
-            <td><input type="text" id="button_subtitle" name="button_subtitle" value="<?php echo esc_attr($subtitle); ?>" class="regular-text"></td>
+            <td><input type="text" id="button_subtitle" name="button_subtitle" value="<?php echo esc_attr($subtitle); ?>" placeholder="예: 신청gogo"></td>
         </tr>
         <tr>
             <th><label for="button_url">링크 URL</label></th>
-            <td><input type="url" id="button_url" name="button_url" value="<?php echo esc_attr($url); ?>" class="regular-text"></td>
+            <td><input type="url" id="button_url" name="button_url" value="<?php echo esc_attr($url); ?>" placeholder="https://example.com"></td>
         </tr>
         <tr>
             <th><label for="button_icon">아이콘 (이모지)</label></th>
@@ -120,7 +150,7 @@ function aros_button_meta_callback($post) {
         </tr>
         <tr>
             <th><label for="button_order">정렬 순서</label></th>
-            <td><input type="number" id="button_order" name="button_order" value="<?php echo esc_attr($order); ?>" min="0"></td>
+            <td><input type="number" id="button_order" name="button_order" value="<?php echo esc_attr($order); ?>" min="0" placeholder="0"></td>
         </tr>
     </table>
     <?php
@@ -128,23 +158,74 @@ function aros_button_meta_callback($post) {
 
 // 버튼 메타 저장
 function aros_save_button_meta($post_id) {
-    if (!isset($_POST['aros_button_nonce_field']) || 
-        !wp_verify_nonce($_POST['aros_button_nonce_field'], 'aros_button_nonce')) {
+    // 자동 저장 체크
+    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) {
         return;
     }
-    
-    if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
-    if (!current_user_can('edit_post', $post_id)) return;
-    
-    $fields = array('button_subtitle', 'button_url', 'button_icon', 'button_color', 'button_section', 'button_order');
-    
-    foreach ($fields as $field) {
+
+    // Nonce 확인
+    if (!isset($_POST['aros_button_meta_nonce']) || 
+        !wp_verify_nonce($_POST['aros_button_meta_nonce'], 'aros_button_save_meta')) {
+        return;
+    }
+
+    // 권한 확인
+    if (!current_user_can('edit_post', $post_id)) {
+        return;
+    }
+
+    // 필드 저장
+    $fields = array(
+        'button_subtitle' => 'sanitize_text_field',
+        'button_url' => 'esc_url_raw',
+        'button_icon' => 'sanitize_text_field',
+        'button_color' => 'sanitize_text_field',
+        'button_section' => 'sanitize_text_field',
+        'button_order' => 'absint'
+    );
+
+    foreach ($fields as $field => $sanitize_function) {
         if (isset($_POST[$field])) {
-            update_post_meta($post_id, '_' . $field, sanitize_text_field($_POST[$field]));
+            $value = call_user_func($sanitize_function, $_POST[$field]);
+            update_post_meta($post_id, '_' . $field, $value);
         }
     }
 }
 add_action('save_post_aros_button', 'aros_save_button_meta');
+
+// 버튼 목록에 컬럼 추가
+function aros_button_columns($columns) {
+    $new_columns = array();
+    $new_columns['cb'] = $columns['cb'];
+    $new_columns['title'] = $columns['title'];
+    $new_columns['subtitle'] = '부제목';
+    $new_columns['section'] = '섹션';
+    $new_columns['color'] = '색상';
+    $new_columns['order'] = '순서';
+    $new_columns['date'] = $columns['date'];
+    return $new_columns;
+}
+add_filter('manage_aros_button_posts_columns', 'aros_button_columns');
+
+// 버튼 목록 컬럼 내용
+function aros_button_column_content($column, $post_id) {
+    switch ($column) {
+        case 'subtitle':
+            echo esc_html(get_post_meta($post_id, '_button_subtitle', true));
+            break;
+        case 'section':
+            echo esc_html(get_post_meta($post_id, '_button_section', true));
+            break;
+        case 'color':
+            $color = get_post_meta($post_id, '_button_color', true);
+            echo '<span class="' . esc_attr($color) . '" style="padding: 3px 8px; border-radius: 3px; background: #2196F3; color: white;">' . esc_html($color) . '</span>';
+            break;
+        case 'order':
+            echo esc_html(get_post_meta($post_id, '_button_order', true));
+            break;
+    }
+}
+add_action('manage_aros_button_posts_custom_column', 'aros_button_column_content', 10, 2);
 
 // 테마 커스터마이저
 function aros_index_customize_register($wp_customize) {
@@ -206,12 +287,13 @@ function aros_index_customize_register($wp_customize) {
         ));
         
         $wp_customize->add_setting("tab{$i}_hash", array(
-            'default' => '',
+            'default' => "aros{$i}",
             'sanitize_callback' => 'sanitize_text_field',
         ));
         
         $wp_customize->add_control("tab{$i}_hash", array(
-            'label' => "탭 {$i} Hash (예: aros1)",
+            'label' => "탭 {$i} Hash",
+            'description' => '예: aros1',
             'section' => 'aros_tabs',
             'type' => 'text',
         ));
@@ -235,8 +317,8 @@ function aros_index_customize_register($wp_customize) {
     ));
     
     $wp_customize->add_setting('main_card_text', array(
-        'default' => '',
-        'sanitize_callback' => 'sanitize_textarea_field',
+        'default' => '대한민국 92%가 놓치고 있던 사실!<br/>근로장려금, 자금 받을 수 있습니다!<br/>바로 확인하고 혜택 놓치지 마세요!',
+        'sanitize_callback' => 'wp_kses_post',
     ));
     
     $wp_customize->add_control('main_card_text', array(
@@ -262,9 +344,16 @@ function aros_index_customize_register($wp_customize) {
         'priority' => 33,
     ));
     
+    $default_sections = array(
+        1 => array('title' => '최대 460만원, 지금 바로 신청!', 'id' => 'aros1'),
+        2 => array('title' => '근로장려금, 당신도 받을 수 있다!', 'id' => 'aros2'),
+        3 => array('title' => '1인당 330만원, 지금 확인!', 'id' => 'aros3'),
+        4 => array('title' => '정부 지원금, 놓치지 마세요!', 'id' => 'aros4'),
+    );
+    
     for ($i = 1; $i <= 4; $i++) {
         $wp_customize->add_setting("section{$i}_title", array(
-            'default' => '',
+            'default' => $default_sections[$i]['title'],
             'sanitize_callback' => 'sanitize_text_field',
         ));
         
@@ -275,7 +364,7 @@ function aros_index_customize_register($wp_customize) {
         ));
         
         $wp_customize->add_setting("section{$i}_id", array(
-            'default' => "aros{$i}",
+            'default' => $default_sections[$i]['id'],
             'sanitize_callback' => 'sanitize_text_field',
         ));
         
@@ -298,7 +387,8 @@ function aros_index_customize_register($wp_customize) {
     ));
     
     $wp_customize->add_control('adsense_client', array(
-        'label' => '애드센스 클라이언트 ID (ca-pub-xxxxx)',
+        'label' => '애드센스 클라이언트 ID',
+        'description' => 'ca-pub-xxxxx 형식',
         'section' => 'aros_adsense',
         'type' => 'text',
     ));
@@ -408,6 +498,7 @@ function get_section_buttons($section) {
             array(
                 'key' => '_button_section',
                 'value' => $section,
+                'compare' => '='
             ),
         ),
         'meta_key' => '_button_order',
